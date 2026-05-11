@@ -37,7 +37,11 @@ ACTOR_ENVIRONMENT_REGISTRY: dict[str, str] = {
     "nemo_rl.models.policy.workers.dtensor_policy_worker.DTensorPolicyWorker": PY_EXECUTABLES.FSDP,
     "nemo_rl.models.policy.workers.dtensor_policy_worker_v2.DTensorPolicyWorkerV2": PY_EXECUTABLES.AUTOMODEL,
     "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker": MCORE_EXECUTABLE,
-    "nemo_rl.models.generation.trtllm.trtllm_worker.TrtllmGenerationWorker": PY_EXECUTABLES.SYSTEM,
+    # tensorrt_llm is pre-installed in the base image (e.g. trtllm_base release
+    # image)'s cp312 system Python — point this actor at CONTAINER_SYSTEM
+    # (overridable via NEMO_RL_CONTAINER_PYTHON) instead of the driver's
+    # uv venv (cp313, which has no tensorrt_llm wheel for cp313).
+    "nemo_rl.models.generation.trtllm.trtllm_worker.TrtllmGenerationWorker": PY_EXECUTABLES.CONTAINER_SYSTEM,
     "nemo_rl.environments.math_environment.MathEnvironment": PY_EXECUTABLES.SYSTEM,
     "nemo_rl.environments.math_environment.MathMultiRewardEnvironment": PY_EXECUTABLES.SYSTEM,
     "nemo_rl.environments.vlm_environment.VLMEnvironment": PY_EXECUTABLES.SYSTEM,
