@@ -593,7 +593,9 @@ def setup(
             processor=processor,
             weights_path=weights_path,
             optimizer_path=optimizer_path,
-            init_optimizer=True,
+            # gen_benchmark_skip_training: pure generation benchmark, no real training
+            # -> don't build the optimizer (saves memory/time; refit needs only weights).
+            init_optimizer=not grpo_config.get("gen_benchmark_skip_training", False),
             init_reference_model=init_reference_model,
         )
         return p, time.perf_counter() - t0
@@ -2496,6 +2498,21 @@ def async_grpo_train(
     POLICY_GENERATION_STALE = True
     assert policy_generation is not None
 
+    # Benchmark-only: skip real training (no fwd/bwd, no optimizer) while still
+    # refitting the (unchanged) weights every step. Keeps the generation pipeline /
+    # weight-sync cadence realistic for a pure generation scaling benchmark.
+    SKIP_TRAINING_BENCHMARK = master_config.grpo.get(
+        "gen_benchmark_skip_training", False
+    )
+    if SKIP_TRAINING_BENCHMARK:
+        print(
+            "⚠️ gen_benchmark_skip_training=True: policy.train() is a no-op; "
+            "weights are frozen and refit every step (generation benchmark mode)."
+        )
+        # Keep training GPUs non-idle so the idle-GPU reaper does not kill the job.
+        if hasattr(policy, "start_gen_benchmark_keepalive"):
+            policy.start_gen_benchmark_keepalive()
+
     # Training state
     step = grpo_save_state["current_step"]
     weight_version = step  # Tracks refitted weight versions
@@ -2953,11 +2970,31 @@ def async_grpo_train(
 
                 print("▶ Training policy...")
                 with timer.time("policy_training"):
-                    train_results = policy.train(
-                        train_data,
-                        loss_fn,
-                        timer=timer,
-                    )
+                    if SKIP_TRAINING_BENCHMARK:
+                        # No-op training: skip fwd/bwd/optimizer entirely. Weights are
+                        # left unchanged and refit as-is below. Still supply the metrics
+                        # the async loop indexes downstream — notably global_valid_toks,
+                        # used for token-throughput accounting (grpo.py refs metrics[
+                        # "global_valid_toks"]). Mirror real train()'s all_mb_metrics shape
+                        # (lists, mean-aggregated downstream).
+                        _valid_toks = int(train_data["token_mask"].sum().item())
+                        _valid_seqs = int(train_data["sample_mask"].sum().item())
+                        train_results = {
+                            "loss": torch.tensor(0.0),
+                            "grad_norm": torch.tensor(0.0),
+                            "all_mb_metrics": {
+                                "global_valid_toks": [_valid_toks],
+                                "global_valid_seqs": [_valid_seqs],
+                                # consumed by the per-step "Generation KL Error" print
+                                "gen_kl_error": [0.0],
+                            },
+                        }
+                    else:
+                        train_results = policy.train(
+                            train_data,
+                            loss_fn,
+                            timer=timer,
+                        )
 
                 print("🔄 Synchronizing policy weights to trajectory collector…")
                 generation_logger_metrics = None

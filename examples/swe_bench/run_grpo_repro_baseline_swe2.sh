@@ -41,18 +41,26 @@ GYM_CODE="${REPO_ROOT}/3rdparty/Gym-workspace/Gym"
 export MOUNTS="/lustre:/lustre,$PWD:$PWD,${GYM_CODE}:/opt/nemo-rl/3rdparty/Gym-workspace/Gym"
 
 # ======================= Cluster / resources =======================
+# SKIP_TRAINING=1 -> generation-only benchmark: training is a no-op (no optimizer,
+# weights frozen, refit every step + keep-alive matmul), pinned to ONE node.
+SKIP_TRAINING="${SKIP_TRAINING:-0}"
 NUM_ACTOR_NODES=${NUM_NODES:-16}
 NUM_GENERATION_NODES=${NUM_GEN_NODES:-8}   # only used in async (non-colocated) mode
+if [ "${SKIP_TRAINING}" = "1" ]; then
+  # no real training -> 1 training node suffices (train_nodes = total - gen).
+  NUM_ACTOR_NODES=$(( NUM_GENERATION_NODES + 1 ))
+fi
 NUM_GPU=8
 export GPUS_PER_NODE=${NUM_GPU}
 export CPUS_PER_WORKER=114
 
 # ============================ Parallelism ============================
-# dc3m70us used TP=2 (NOT TP=4). make_sequence_length_divisible_by auto = 16.
-TP=4
-EP=8
-CP=4
-PP=2
+# SKIP_TRAINING -> training must fit 1 node, so model_parallel = TP*CP*PP <= 8.
+if [ "${SKIP_TRAINING}" = "1" ]; then
+  TP=8; EP=8; CP=1; PP=1     # model_parallel=8 (fits 1 node), train_DP=1
+else
+  TP=4; EP=8; CP=4; PP=2     # dc3m70us-style real training
+fi
 VLLM_TP=2
 MIN_PAD=1
 if [ ${CP} -gt 1 ]; then MIN_PAD=$((MIN_PAD * CP * 2)); fi
@@ -139,7 +147,9 @@ if [ "${ASYNC_GRPO_ENABLED}" = "True" ]; then
 else
   SYNC_MODE="sync"
 fi
-EXP_SUFFIX="${EXP_SUFFIX:-repro-baseline-swe2-a760f1c-nliang-${SYNC_MODE}-pps${PPS}-gpp${GPP}-gbs${GBS}-lr${LR}-tp${TP}}"
+MODE_TAG=""
+if [ "${SKIP_TRAINING}" = "1" ]; then MODE_TAG="notrain-"; fi
+EXP_SUFFIX="${EXP_SUFFIX:-repro-baseline-swe2-${MODE_TAG}${SYNC_MODE}-pps${PPS}-gpp${GPP}-gbs${GBS}-lr${LR}-tp${TP}}"
 WANDB_NAME="${EXP_SUFFIX}"
 CHECKPOINT_DIR="${CHECKPOINT_ROOT}/${EXP_SUFFIX}"
 SNAPSHOT_DIR="${REPO_ROOT}"
@@ -179,9 +189,9 @@ mkdir -p "${LUSTRE_VLLM_CACHE}" "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACH
 # ============================== Summary ==============================
 echo "=========================================="
 echo "REPRO of baseline dc3m70us | Experiment: ${EXP_SUFFIX}"
-echo "Code: a760f1c (in-place) | Container: nliang"
+echo "Code: a760f1c (in-place) | Container: nliang | SKIP_TRAINING=${SKIP_TRAINING}"
 echo "Mode: ${SYNC_MODE}, Colocated: ${COLOCATED_ENABLED}"
-echo "Nodes: ${NUM_ACTOR_NODES}, GPUs/node: ${NUM_GPU}"
+echo "Nodes: ${NUM_ACTOR_NODES} total (train=$(( NUM_ACTOR_NODES - NUM_GENERATION_NODES )), gen=${NUM_GENERATION_NODES}), GPUs/node: ${NUM_GPU}"
 echo "Parallelism: TP=${TP}, EP=${EP}, CP=${CP}, PP=${PP}, vLLM_TP=${VLLM_TP}, pad=${MAKE_SEQ_DIVISIBLE_BY}"
 echo "Training: PPS=${PPS}, GPP=${GPP}, GBS=${GBS}, LR=${LR}"
 echo "Model: ${MODEL_PATH}"
@@ -340,6 +350,11 @@ if [ "${ASYNC_GRPO_ENABLED}" = "True" ]; then
   env.nemo_gym.swe_agents_train.responses_api_agents.swe_agents.swebench_agent_timeout=${AGENT_TIMEOUT} \
   env.nemo_gym.swe_agents_val.responses_api_agents.swe_agents.agent_max_turns=${AGENT_MAX_TURNS} \
   env.nemo_gym.swe_agents_val.responses_api_agents.swe_agents.swebench_agent_timeout=${AGENT_TIMEOUT}"
+fi
+
+# Generation-only benchmark: no-op training (no optimizer) + disable checkpoint saving.
+if [ "${SKIP_TRAINING}" = "1" ]; then
+  export COMMAND="${COMMAND} ++grpo.gen_benchmark_skip_training=true checkpointing.enabled=false"
 fi
 
 # ================ Submit job ================
