@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import time
 from pathlib import Path
 from typing import Any, Dict, List, TypedDict
 
@@ -21,6 +22,17 @@ from transformers import PreTrainedTokenizerBase
 from nemo_rl.distributed.virtual_cluster import _get_free_port_local, _get_node_ip_local
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.utils.timer import Timer
+
+
+def _percentile(sorted_values: list[float], q: float) -> float:
+    """Linear-interpolation percentile of an already-sorted list (q in [0, 1])."""
+    if not sorted_values:
+        return 0.0
+    idx = q * (len(sorted_values) - 1)
+    lower = int(idx)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    frac = idx - lower
+    return sorted_values[lower] * (1 - frac) + sorted_values[upper] * frac
 
 
 class NemoGymConfig(TypedDict):
@@ -124,6 +136,10 @@ Depending on your data shape, you may want to change these values."""
 
         timer.start("_run_rollouts_total")
         max_attempts, trial = self.rollout_max_attempts_to_avoid_lp_nan, 0
+        # Per-trajectory wall time (seconds) measured from this group's rollout
+        # dispatch to each individual rollout's completion. Captured in-process via
+        # time.time(), so it is unaffected by stdout/stderr log buffering.
+        per_traj_wall_times: list[float] = []
         while trial < max_attempts:
             nemo_gym_num_rows = len(nemo_gym_examples)
             nemo_gym_result_iterator = self.rch.run_examples(
@@ -132,9 +148,12 @@ Depending on your data shape, you may want to change these values."""
 
             nemo_rl_rowidxs = []
             nemo_rl_results = []
+            per_traj_wall_times = []
+            attempt_start = time.time()
             for task in nemo_gym_result_iterator:
                 with timer.time(label=f"{timer_prefix}/await_results"):
                     nemo_gym_row, nemo_gym_result = await task
+                per_traj_wall_times.append(time.time() - attempt_start)
 
                 with timer.time(label=f"{timer_prefix}/postprocess_results"):
                     nemo_rl_result = self._postprocess_nemo_gym_to_nemo_rl_result(
@@ -175,6 +194,18 @@ Depending on your data shape, you may want to change these values."""
         timing_metrics[f"{timer_prefix}/postprocess_results_pct"] = (
             100 * timing_metrics[f"{timer_prefix}/postprocess_results"] / total_time
         )
+
+        # Per-trajectory wall-time distribution for this prompt group. Each group
+        # contributes one mean/p50/p90; the GRPO loop averages these across the
+        # prompt groups sampled in a step (so step-level values are the mean of
+        # per-group statistics, not exact percentiles over all trajectories).
+        if per_traj_wall_times:
+            sorted_wall_times = sorted(per_traj_wall_times)
+            timing_metrics["traj_wall_time/mean"] = sum(sorted_wall_times) / len(
+                sorted_wall_times
+            )
+            timing_metrics["traj_wall_time/p50"] = _percentile(sorted_wall_times, 0.50)
+            timing_metrics["traj_wall_time/p90"] = _percentile(sorted_wall_times, 0.90)
 
         return nemo_rl_results, timing_metrics
 
