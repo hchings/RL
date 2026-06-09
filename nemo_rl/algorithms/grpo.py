@@ -2662,6 +2662,10 @@ def async_grpo_train(
 
     # Start trajectory collection in background
     collection_task = trajectory_collector.start_collection.remote(dataloader)
+    # Wall-clock anchor: measures time from generation-pipeline start (here) until the replay
+    # buffer is first filled (logged below). Does NOT include model load / vLLM init (those finish
+    # before async_grpo_train); it captures the first-generation lead-in before training can begin.
+    _buffer_fill_start_time = time.time()
 
     # Ensure collector knows initial weight version
     trajectory_collector.set_weight_version.remote(weight_version)
@@ -2747,6 +2751,16 @@ def async_grpo_train(
         )
 
         if buffer_size_current >= min_trajectories_needed:
+            _first_buffer_fill_seconds = time.time() - _buffer_fill_start_time
+            print(
+                f"⏱️ First replay-buffer fill took {_first_buffer_fill_seconds:.1f}s "
+                f"(reached {min_trajectories_needed} trajectories)"
+            )
+            logger.log_metrics(
+                {"first_buffer_fill_seconds": _first_buffer_fill_seconds},
+                step=0,
+                prefix="timing/async",
+            )
             break
 
         time.sleep(1.0)
