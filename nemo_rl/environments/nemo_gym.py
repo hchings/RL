@@ -268,17 +268,34 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
             output_item_dict.pop("generation_log_probs")
 
         if not nemo_rl_message_log:
-            input_messages = nemo_gym_result["responses_create_params"]["input"]
-            prompt_token_ids = tokenizer.apply_chat_template(
-                input_messages, tokenize=True
+            # No generation data came back. Build a prompt-length hint DEFENSIVELY:
+            # apply_chat_template() raises `IndexError: list index out of range` on an
+            # empty conversation, which previously masked the real cause (an upstream
+            # generation failure -- e.g. a dead/timed-out vLLM engine returning a result
+            # with no input/output -- rather than a too-long prompt).
+            input_messages = nemo_gym_result.get("responses_create_params", {}).get(
+                "input", []
             )
+            prompt_len_str = "unknown"
+            if input_messages:
+                try:
+                    prompt_token_ids = tokenizer.apply_chat_template(
+                        input_messages, tokenize=True
+                    )
+                    prompt_len_str = f"{len(prompt_token_ids)} tokens"
+                except Exception as e:  # noqa: BLE001 - diagnostics only
+                    prompt_len_str = f"unavailable ({type(e).__name__}: {e})"
             raise ValueError(
-                f"NeMo Gym returned a result with no generation data. "
-                f"This typically means the prompt for the first turn already exceeds the vLLM max_model_len, "
-                f"so vLLM rejected the request before any tokens could be generated.\n"
-                f"  Prompt length: {len(prompt_token_ids)} tokens.\n"
-                f"  → Fix: increase `policy.max_total_sequence_length` and `policy.generation.vllm_cfg.max_model_len` "
-                f"to a value larger than {len(prompt_token_ids)}."
+                "NeMo Gym returned a result with no generation data "
+                f"(input messages: {len(input_messages)}). Likely causes:\n"
+                "  (1) the vLLM generation engine failed / returned no output for this "
+                "request (e.g. EngineDeadError, or a crashed / timed-out generation "
+                "worker) -- check the vLLM worker logs; or\n"
+                "  (2) the first-turn prompt already exceeds vLLM max_model_len, so the "
+                "request was rejected before any tokens could be generated.\n"
+                f"  Prompt length: {prompt_len_str}.\n"
+                "  -> If (2): increase `policy.max_total_sequence_length` and "
+                "`policy.generation.vllm_cfg.max_model_len`."
             )
 
         return {
