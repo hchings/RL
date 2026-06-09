@@ -528,6 +528,11 @@ def setup(
             use_gpus=True,
             num_gpus_per_node=train_gpus_per_node,
             max_colocated_worker_groups=1,
+            # PACK (not the default SPREAD) so the train bundles co-locate onto the fewest/closest
+            # nodes -> the EP group stays inside one NVL72 rack (one MNNVL domain). SPREAD scattered
+            # the train nodes across racks, which split the EP=32 fabric group (deep_ep detected only
+            # 12 accessible ranks) and hung cross-rack NCCL. The gen cluster already uses PACK.
+            placement_group_strategy="PACK",
         )
         print(
             f"  ✓ Ray train cluster initialized with {train_nodes} nodes with {train_gpus_per_node} GPUs per node",
@@ -541,6 +546,10 @@ def setup(
             use_gpus=True,
             num_gpus_per_node=inference_gpus_per_node,
             max_colocated_worker_groups=1,
+            # PACK (not default SPREAD): co-locate gen bundles so a cross-node vLLM TP replica
+            # (TP>NUM_GPU, e.g. TP8 = 2 nodes) gets rack-adjacent nodes (one NVLink domain) instead
+            # of being scattered across racks -> avoids the cross-rack TP RayChannelTimeout hang.
+            placement_group_strategy="PACK",
         )
         print(
             f"  ✓ Ray inference cluster initialized with {inference_nodes} nodes with {inference_gpus_per_node} GPUs per node",
