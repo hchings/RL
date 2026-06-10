@@ -2552,7 +2552,7 @@ def async_grpo_train(
     # Benchmark-only: skip real training (no fwd/bwd, no optimizer) while still
     # refitting the (unchanged) weights every step. Keeps the generation pipeline /
     # weight-sync cadence realistic for a pure generation scaling benchmark.
-    SKIP_TRAINING_BENCHMARK = master_config.grpo.get(
+    SKIP_TRAINING_BENCHMARK = master_config["grpo"].get(
         "gen_benchmark_skip_training", False
     )
     if SKIP_TRAINING_BENCHMARK:
