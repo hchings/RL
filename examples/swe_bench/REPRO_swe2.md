@@ -58,12 +58,13 @@ export REPO_ROOT="$PWD"                     # = your clone; the launcher also au
 
 ### 2.2 Container
 
-Uses **baseline's nliang container**, NOT the default NeMo-RL image. This is the
-critical part of the repro — its vLLM is the one where the hermes tool parser
-patch applies, so the agent makes real `function_call` items:
+Uses the **SWE training container** (`ruit-swe_bench`, with mcore + apptainer baked
+in), NOT the default NeMo-RL image. Its vLLM has the working hermes tool parser, so
+the agent emits real `function_call` items (a broken parser was the original
+zero-reward failure mode):
 
 ```
-/lustre/fsw/portfolios/coreai/users/nliang/enroot-images/docker_images:nliang-qwen3-swe-training-e19dee3ba-x86_64-051626.squashfs
+/lustre/fsw/portfolios/coreai/users/ruit/enroot-images/docker_images:ruit-swe_bench-6de99f772-x86_64-060326-mcore-apptainer.squashfs
 ```
 
 It is wired in via the `CONTAINER` env var (overridable). The job mounts:
@@ -86,7 +87,7 @@ Confirm these absolute paths exist before submitting:
 | `/lustre/fsw/portfolios/coreai/users/bihu/repos/nemo-rl-async-swe/results/qwen3-30b-thinking-swe1-async-age1-pps64-gpp8-gbs512-lr1e-06/step_230_hf` | init checkpoint |
 | `/lustre/fsw/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/sdevare/repos/nano/dataset/rl/swe_all_datasets_train_w_agent_ref_r2e_gym_subset.jsonl` | train + val data |
 | `${REPO_ROOT}/ray.sub` | SLURM launcher consumed by `sbatch` |
-| `/lustre/fsw/portfolios/coreai/users/nliang/enroot-images/docker_images:nliang-qwen3-swe-training-e19dee3ba-x86_64-051626.squashfs` | training container |
+| `/lustre/fsw/portfolios/coreai/users/ruit/enroot-images/docker_images:ruit-swe_bench-6de99f772-x86_64-060326-mcore-apptainer.squashfs` | training container |
 
 Per-instance SWE-bench `.sif` sandbox images (resolved by `container_formatter`
 in the YAML, first match wins):
@@ -200,7 +201,7 @@ export WANDB_API_KEY=...     # for wandb logging
 export GITHUB_TOKEN=...      # only if your data/repo access needs it
 
 # 3. (Optional) sanity-check the shared assets exist (readable on cw-dfw-cs)
-ls "/lustre/fsw/portfolios/coreai/users/nliang/enroot-images/docker_images:nliang-qwen3-swe-training-e19dee3ba-x86_64-051626.squashfs"
+ls "/lustre/fsw/portfolios/coreai/users/ruit/enroot-images/docker_images:ruit-swe_bench-6de99f772-x86_64-060326-mcore-apptainer.squashfs"
 ls -d "/lustre/fsw/portfolios/coreai/users/bihu/repos/nemo-rl-async-swe/results/qwen3-30b-thinking-swe1-async-age1-pps64-gpp8-gbs512-lr1e-06/step_230_hf"
 ls "/lustre/fsw/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/sdevare/repos/nano/dataset/rl/swe_all_datasets_train_w_agent_ref_r2e_gym_subset.jsonl"
 
@@ -216,7 +217,7 @@ The script prints a summary, submits via `sbatch`, and writes the job id to
 | Var | Default | Effect |
 |-----|---------|--------|
 | `MODEL_PATH` (also `$1`) | `/lustre/fsw/portfolios/coreai/users/bihu/repos/nemo-rl-async-swe/results/qwen3-30b-thinking-swe1-async-age1-pps64-gpp8-gbs512-lr1e-06/step_230_hf` | init checkpoint |
-| `CONTAINER` | `/lustre/fsw/portfolios/coreai/users/nliang/enroot-images/docker_images:nliang-qwen3-swe-training-e19dee3ba-x86_64-051626.squashfs` | training image |
+| `CONTAINER` | `/lustre/fsw/portfolios/coreai/users/ruit/enroot-images/docker_images:ruit-swe_bench-6de99f772-x86_64-060326-mcore-apptainer.squashfs` | training image |
 | `NUM_NODES` | 16 | actor nodes |
 | `NUM_GEN_NODES` | 8 | generation nodes (async only) |
 | `SKIP_TRAINING` | `0` | `1` = generation-only benchmark: no-op training pinned to 1 node (see §9) |
@@ -261,7 +262,7 @@ tail -f ${REPO_ROOT}/logs/slurm/slurm-${JOB_ID}.out  # driver output
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| Reward is identically 0 | wrong container — hermes tool parser broken, no tool calls | confirm `CONTAINER` is the nliang squashfs, not the default image |
+| Reward is identically 0 | wrong container — hermes tool parser broken, no tool calls | confirm `CONTAINER` is the `ruit-swe_bench` squashfs, not the default image |
 | `version mismatch` abort | strict version check | ensure `NRL_IGNORE_VERSION_MISMATCH=1` is in the command (it is, by default) |
 | Gym venv rebuild / slowness | venv rebuilt instead of reused | confirm `NEMO_GYM_SKIP_VENV_IF_PRESENT=1` and the Gym mount are present |
 | Agent can't start sandbox | apptainer/singularity missing or `.sif` images missing | check `SETUP_COMMAND` apptainer install succeeded; verify `container_formatter` paths in the YAML |
@@ -277,7 +278,7 @@ Code:        NeMo-RL @ branch ruit/SWE_bench (run in place from your clone)
 Compute:     cw-dfw-cs (SLURM)
 Repo:        github.com/NVIDIA-NeMo/RL  @  branch ruit/SWE_bench
 REPO_ROOT:   your clone (export REPO_ROOT=<clone>; launcher also auto-detects it)
-Container:   /lustre/fsw/portfolios/coreai/users/nliang/enroot-images/docker_images:nliang-qwen3-swe-training-e19dee3ba-x86_64-051626.squashfs
+Container:   /lustre/fsw/portfolios/coreai/users/ruit/enroot-images/docker_images:ruit-swe_bench-6de99f772-x86_64-060326-mcore-apptainer.squashfs
 Init model:  /lustre/fsw/portfolios/coreai/users/bihu/repos/nemo-rl-async-swe/results/qwen3-30b-thinking-swe1-async-age1-pps64-gpp8-gbs512-lr1e-06/step_230_hf
 Train data:  /lustre/fsw/portfolios/llmservice/projects/llmservice_modelalignment_ppo/users/sdevare/repos/nano/dataset/rl/swe_all_datasets_train_w_agent_ref_r2e_gym_subset.jsonl
 Config:      ${REPO_ROOT}/examples/swe_bench/grpo_qwen3_30b_async_swe.yaml

@@ -8,8 +8,8 @@
 #
 # Matched to dc3m70us:
 #   Code:       NeMo-RL @ commit a760f1c (current dir)
-#   Container:  baseline's nliang-qwen3-swe-training image (vLLM where the hermes
-#               tool parser works -> agent makes real tool calls)
+#   Container:  ruit-swe_bench (mcore + apptainer; vLLM where the hermes tool
+#               parser works -> agent makes real tool calls)
 #   COMMAND:    baseline-style (uv run --frozen, NO --extra mcore,
 #               NRL_IGNORE_VERSION_MISMATCH=1, NEMO_GYM_SKIP_VENV_IF_PRESENT=1)
 #   Parallel:   TP=2, EP=8, CP=4, PP=2 (dc3m70us used TP=2, NOT TP=4)
@@ -35,8 +35,9 @@ DEFAULT_MODEL_PATH="/lustre/fsw/portfolios/coreai/users/bihu/repos/nemo-rl-async
 MODEL_PATH="${1:-${MODEL_PATH:-${DEFAULT_MODEL_PATH}}}"
 
 # ================ Container and mount config ================
-# baseline's nliang container — the vLLM here lets the hermes tool parser patch apply.
-export CONTAINER=${CONTAINER:-/lustre/fsw/portfolios/coreai/users/nliang/enroot-images/docker_images:nliang-qwen3-swe-training-e19dee3ba-x86_64-051626.squashfs}
+# SWE training container (mcore + apptainer baked in, working hermes tool parser
+# so the agent emits real tool calls).
+export CONTAINER=${CONTAINER:-/lustre/fsw/portfolios/coreai/users/ruit/enroot-images/docker_images:ruit-swe_bench-6de99f772-x86_64-060326-mcore-apptainer.squashfs}
 GYM_CODE="${REPO_ROOT}/3rdparty/Gym-workspace/Gym"
 export MOUNTS="/lustre:/lustre,$PWD:$PWD,${GYM_CODE}:/opt/nemo-rl/3rdparty/Gym-workspace/Gym"
 
@@ -189,7 +190,7 @@ mkdir -p "${LUSTRE_VLLM_CACHE}" "${LUSTRE_INDUCTOR_CACHE}" "${LUSTRE_TRITON_CACH
 # ============================== Summary ==============================
 echo "=========================================="
 echo "REPRO of baseline dc3m70us | Experiment: ${EXP_SUFFIX}"
-echo "Code: a760f1c (in-place) | Container: nliang | SKIP_TRAINING=${SKIP_TRAINING}"
+echo "Container: ruit-swe_bench (mcore+apptainer) | SKIP_TRAINING=${SKIP_TRAINING}"
 echo "Mode: ${SYNC_MODE}, Colocated: ${COLOCATED_ENABLED}"
 echo "Nodes: ${NUM_ACTOR_NODES} total (train=$(( NUM_ACTOR_NODES - NUM_GENERATION_NODES )), gen=${NUM_GENERATION_NODES}), GPUs/node: ${NUM_GPU}"
 echo "Parallelism: TP=${TP}, EP=${EP}, CP=${CP}, PP=${PP}, vLLM_TP=${VLLM_TP}, pad=${MAKE_SEQ_DIVISIBLE_BY}"
