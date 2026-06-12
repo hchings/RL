@@ -9,8 +9,9 @@ Step-by-step guide to reproduce baseline's successful SWE2 GRPO run
 - **Config:** `${REPO_ROOT}/examples/swe_bench/grpo_qwen3_30b_async_swe.yaml` (passed to the launcher via `--config`)
 
 The goal of this run is to confirm that the earlier *zero-reward* failure was
-caused by the **container / vLLM** (a broken hermes tool parser that prevented
-the agent from emitting real tool calls), **not** by the model or the config.
+caused by the **container / vLLM** (vLLM 0.20.0 garbled the **entire trajectory** —
+the generated text came out as gibberish, so the agent never produced usable tool
+calls), **not** by the model or the config.
 A correct repro resolves ~8% of SWE-bench instances starting from step 1.
 
 > Run this on **`cw-dfw-cs`**. **Do not run from anyone else's checkout** — clone
@@ -59,9 +60,10 @@ export REPO_ROOT="$PWD"                     # = your clone; the launcher also au
 ### 2.2 Container
 
 Uses the **SWE training container** (`ruit-swe_bench`, with mcore + apptainer baked
-in), NOT the default NeMo-RL image. Its vLLM has the working hermes tool parser, so
-the agent emits real `function_call` items (a broken parser was the original
-zero-reward failure mode):
+in), NOT the default NeMo-RL image. Its vLLM produces clean generations, so the
+agent emits real `function_call` items. The default image ships vLLM 0.20.0, which
+garbled the **entire trajectory** (gibberish output) — that was the original
+zero-reward failure mode:
 
 ```
 /lustre/fsw/portfolios/coreai/users/ruit/enroot-images/docker_images:ruit-swe_bench-6de99f772-x86_64-060326-mcore-apptainer.squashfs
@@ -252,8 +254,9 @@ tail -f ${REPO_ROOT}/logs/slurm/slurm-${JOB_ID}.out  # driver output
 ### What "success" looks like
 - `train:total_reward/mean` is **non-zero from step ~1** (the failure mode was
   identically zero reward).
-- Logged Gym responses contain real `function_call` items (proves the hermes
-  tool parser is working in this container).
+- Logged Gym responses contain real `function_call` items and coherent,
+  non-garbled text (proves vLLM is generating cleanly in this container, unlike
+  the gibberish from vLLM 0.20.0 in the default image).
 - Resolved rate climbs toward ~8%.
 
 ---
@@ -262,7 +265,7 @@ tail -f ${REPO_ROOT}/logs/slurm/slurm-${JOB_ID}.out  # driver output
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| Reward is identically 0 | wrong container — hermes tool parser broken, no tool calls | confirm `CONTAINER` is the `ruit-swe_bench` squashfs, not the default image |
+| Reward is identically 0 | wrong container — vLLM 0.20.0 garbles the whole trajectory (gibberish output), no usable tool calls | confirm `CONTAINER` is the `ruit-swe_bench` squashfs, not the default image |
 | `version mismatch` abort | strict version check | ensure `NRL_IGNORE_VERSION_MISMATCH=1` is in the command (it is, by default) |
 | Gym venv rebuild / slowness | venv rebuilt instead of reused | confirm `NEMO_GYM_SKIP_VENV_IF_PRESENT=1` and the Gym mount are present |
 | Agent can't start sandbox | apptainer/singularity missing or `.sif` images missing | check `SETUP_COMMAND` apptainer install succeeded; verify `container_formatter` paths in the YAML |

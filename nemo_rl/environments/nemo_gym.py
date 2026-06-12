@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import time
 from pathlib import Path
 from typing import Any, Dict, List, TypedDict
 
@@ -21,6 +22,17 @@ from transformers import PreTrainedTokenizerBase
 from nemo_rl.distributed.virtual_cluster import _get_free_port_local, _get_node_ip_local
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.utils.timer import Timer
+
+
+def _percentile(sorted_values: list[float], q: float) -> float:
+    """Linear-interpolation percentile of an already-sorted list (q in [0, 1])."""
+    if not sorted_values:
+        return 0.0
+    idx = q * (len(sorted_values) - 1)
+    lower = int(idx)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    frac = idx - lower
+    return sorted_values[lower] * (1 - frac) + sorted_values[upper] * frac
 
 
 class NemoGymConfig(TypedDict):
@@ -124,6 +136,10 @@ Depending on your data shape, you may want to change these values."""
 
         timer.start("_run_rollouts_total")
         max_attempts, trial = self.rollout_max_attempts_to_avoid_lp_nan, 0
+        # Per-trajectory wall time (seconds) measured from this group's rollout
+        # dispatch to each individual rollout's completion. Captured in-process via
+        # time.time(), so it is unaffected by stdout/stderr log buffering.
+        per_traj_wall_times: list[float] = []
         while trial < max_attempts:
             nemo_gym_num_rows = len(nemo_gym_examples)
             nemo_gym_result_iterator = self.rch.run_examples(
@@ -132,9 +148,12 @@ Depending on your data shape, you may want to change these values."""
 
             nemo_rl_rowidxs = []
             nemo_rl_results = []
+            per_traj_wall_times = []
+            attempt_start = time.time()
             for task in nemo_gym_result_iterator:
                 with timer.time(label=f"{timer_prefix}/await_results"):
                     nemo_gym_row, nemo_gym_result = await task
+                per_traj_wall_times.append(time.time() - attempt_start)
 
                 with timer.time(label=f"{timer_prefix}/postprocess_results"):
                     nemo_rl_result = self._postprocess_nemo_gym_to_nemo_rl_result(
@@ -175,6 +194,18 @@ Depending on your data shape, you may want to change these values."""
         timing_metrics[f"{timer_prefix}/postprocess_results_pct"] = (
             100 * timing_metrics[f"{timer_prefix}/postprocess_results"] / total_time
         )
+
+        # Per-trajectory wall-time distribution for this prompt group. Each group
+        # contributes one mean/p50/p90; the GRPO loop averages these across the
+        # prompt groups sampled in a step (so step-level values are the mean of
+        # per-group statistics, not exact percentiles over all trajectories).
+        if per_traj_wall_times:
+            sorted_wall_times = sorted(per_traj_wall_times)
+            timing_metrics["traj_wall_time/mean"] = sum(sorted_wall_times) / len(
+                sorted_wall_times
+            )
+            timing_metrics["traj_wall_time/p50"] = _percentile(sorted_wall_times, 0.50)
+            timing_metrics["traj_wall_time/p90"] = _percentile(sorted_wall_times, 0.90)
 
         return nemo_rl_results, timing_metrics
 
@@ -237,17 +268,34 @@ Output prompt token IDs: {output_item_dict["prompt_token_ids"]}
             output_item_dict.pop("generation_log_probs")
 
         if not nemo_rl_message_log:
-            input_messages = nemo_gym_result["responses_create_params"]["input"]
-            prompt_token_ids = tokenizer.apply_chat_template(
-                input_messages, tokenize=True
+            # No generation data came back. Build a prompt-length hint DEFENSIVELY:
+            # apply_chat_template() raises `IndexError: list index out of range` on an
+            # empty conversation, which previously masked the real cause (an upstream
+            # generation failure -- e.g. a dead/timed-out vLLM engine returning a result
+            # with no input/output -- rather than a too-long prompt).
+            input_messages = nemo_gym_result.get("responses_create_params", {}).get(
+                "input", []
             )
+            prompt_len_str = "unknown"
+            if input_messages:
+                try:
+                    prompt_token_ids = tokenizer.apply_chat_template(
+                        input_messages, tokenize=True
+                    )
+                    prompt_len_str = f"{len(prompt_token_ids)} tokens"
+                except Exception as e:  # noqa: BLE001 - diagnostics only
+                    prompt_len_str = f"unavailable ({type(e).__name__}: {e})"
             raise ValueError(
-                f"NeMo Gym returned a result with no generation data. "
-                f"This typically means the prompt for the first turn already exceeds the vLLM max_model_len, "
-                f"so vLLM rejected the request before any tokens could be generated.\n"
-                f"  Prompt length: {len(prompt_token_ids)} tokens.\n"
-                f"  → Fix: increase `policy.max_total_sequence_length` and `policy.generation.vllm_cfg.max_model_len` "
-                f"to a value larger than {len(prompt_token_ids)}."
+                "NeMo Gym returned a result with no generation data "
+                f"(input messages: {len(input_messages)}). Likely causes:\n"
+                "  (1) the vLLM generation engine failed / returned no output for this "
+                "request (e.g. EngineDeadError, or a crashed / timed-out generation "
+                "worker) -- check the vLLM worker logs; or\n"
+                "  (2) the first-turn prompt already exceeds vLLM max_model_len, so the "
+                "request was rejected before any tokens could be generated.\n"
+                f"  Prompt length: {prompt_len_str}.\n"
+                "  -> If (2): increase `policy.max_total_sequence_length` and "
+                "`policy.generation.vllm_cfg.max_model_len`."
             )
 
         return {
