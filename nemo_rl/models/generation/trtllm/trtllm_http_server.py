@@ -188,6 +188,25 @@ def _strip_tool_call_tags(text: str) -> str:
 #  Prompt construction
 # ---------------------------------------------------------------------------
 
+def _to_int_ids(enc: Any) -> list[int]:
+    """Coerce apply_chat_template output to a flat list[int].
+
+    transformers 5.x (TokenizersBackend) returns a BatchEncoding from
+    apply_chat_template(tokenize=True), NOT a flat list[int]; TRT-LLM's
+    executor asserts isinstance(prompt_token_ids[0], int). Extract the ids
+    and flatten/coerce.
+    """
+    if hasattr(enc, "input_ids"):  # BatchEncoding
+        enc = enc.input_ids
+    if hasattr(enc, "ids"):  # tokenizers.Encoding
+        enc = enc.ids
+    if len(enc) and isinstance(enc[0], (list, tuple)):  # batched / nested
+        enc = enc[0]
+    if len(enc) and hasattr(enc[0], "ids"):  # list[Encoding]
+        enc = enc[0].ids
+    return [int(t) for t in enc]
+
+
 def _build_prompt_token_ids(
     messages: list[dict[str, Any]],
     tokenizer: Any,
@@ -225,15 +244,16 @@ def _build_prompt_token_ids(
         template_kwargs["tools"] = tools
 
     if prefix_ids is not None and new_messages_start is not None:
+        prefix_ids = [int(t) for t in prefix_ids]
         remaining = messages[new_messages_start:]
         if remaining:
             clean = [_strip_token_fields(m) for m in remaining]
-            suffix_ids = tokenizer.apply_chat_template(clean, **template_kwargs)
+            suffix_ids = _to_int_ids(tokenizer.apply_chat_template(clean, **template_kwargs))
             return prefix_ids + suffix_ids
         return prefix_ids
 
     clean = [_strip_token_fields(m) for m in messages]
-    return tokenizer.apply_chat_template(clean, **template_kwargs)
+    return _to_int_ids(tokenizer.apply_chat_template(clean, **template_kwargs))
 
 
 def _strip_token_fields(msg: dict[str, Any]) -> dict[str, Any]:
