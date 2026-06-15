@@ -137,6 +137,9 @@ class TrtllmGenerationWorkerImpl:
             max_batch_size=max_batch_size,
             max_num_tokens=max_num_tokens,
             max_seq_len=trtllm_cfg["max_model_len"],
+            # TRT-LLM defaults max_input_len=1024 (vs vLLM which has no separate input cap and
+            # accepts prompts up to max_model_len). Long SWE-agent prompts get rejected otherwise.
+            max_input_len=trtllm_cfg["max_model_len"],
             orchestrator_type="ray",
             ray_worker_extension_cls="nemo_rl.models.generation.trtllm.trtllm_backend.NcclExtension",
             ray_placement_config=ray_placement_config,
