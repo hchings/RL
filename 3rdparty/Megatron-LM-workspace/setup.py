@@ -182,6 +182,10 @@ if os.path.exists(megatron_core_python_package_source_dir):
         final_ext_modules.append(megatron_extension)
 # --- End of megatron.core conditional section ---
 
+# WAR: flashinfer version is managed by TRT-LLM (needs >=0.6.12); exclude it from
+# install_requires so megatron-core does not downgrade it.
+INSTALL_DEPENDENCIES = [d for d in CACHED_DEPENDENCIES if not d.startswith("flashinfer-python")]
+
 setuptools.setup(
     name="megatron-core",
     version="0.0.0",
@@ -191,5 +195,5 @@ setuptools.setup(
     ext_modules=final_ext_modules,
     # Add in any packaged data.
     include_package_data=True,
-    install_requires=CACHED_DEPENDENCIES,
+    install_requires=INSTALL_DEPENDENCIES,
 )

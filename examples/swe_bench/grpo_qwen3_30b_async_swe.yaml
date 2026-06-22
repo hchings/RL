@@ -339,6 +339,16 @@ policy:
       compilation_config:
         cudagraph_capture_sizes: [1,2,4,8,16,32,64]
 
+    trtllm_cfg:
+      tensor_parallel_size: 2
+      precision: ${policy.precision}
+      max_model_len: ${policy.max_total_sequence_length}
+      gpu_memory_utilization: 0.8
+      async_engine: true
+      in_flight_weight_updates: true
+      recompute_kv_cache_after_weight_updates: false
+      expose_http_server: true
+
     colocated:
       enabled: false
       resources:
