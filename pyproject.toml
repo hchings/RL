@@ -104,8 +104,8 @@ vllm = [
   "vllm @ https://github.com/vllm-project/vllm/releases/download/v0.17.1/vllm-0.17.1+cu130-cp38-abi3-manylinux_2_35_x86_64.whl ; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "vllm==0.17.1 ; sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'x86_64')",
   "num2words>=0.5.14",
-  "flashinfer-python==0.6.4",
-  "flashinfer-cubin==0.6.4",
+  "flashinfer-python==0.6.12",
+  "flashinfer-cubin==0.6.12",
   "nvidia-cutlass-dsl>=4.4.0.dev1",
 ]
 sglang = [
