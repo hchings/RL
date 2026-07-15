@@ -282,6 +282,12 @@ class TrtllmGenerationWorkerImpl:
     def reset_prefix_cache(self) -> bool:
         return self._collective_rpc("reset_prefix_cache")
 
+    def start_gpu_profiling(self) -> None:
+        self._collective_rpc("start_gpu_profiling")
+
+    def stop_gpu_profiling(self) -> None:
+        self._collective_rpc("stop_gpu_profiling")
+
     # ------------------------------------------------------------------ #
     #  Generation
     # ------------------------------------------------------------------ #
