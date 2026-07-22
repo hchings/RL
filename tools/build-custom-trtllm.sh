@@ -102,7 +102,7 @@ sed -i 's|-DCMAKE_CUDA_ARCHITECTURES:STRING=${DEEP_EP_CUDA_ARCHITECTURES}|-DCMAK
 #                            libnvrtc-builtins lazily instead of statically.
 echo "Building TensorRT-LLM wheel (this takes ~30-60 minutes)..."
 python3 scripts/build_wheel.py \
-    -a "100-real, 103-real" \
+    -a "100-real;103-real" \
     -G Ninja \
     --clean \
     --nvrtc_dynamic_linking \
