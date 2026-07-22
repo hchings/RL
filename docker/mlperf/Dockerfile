@@ -32,6 +32,7 @@ apt-get install -y --no-install-recommends \
     wget \
     less \
     vim \
+    ccache \
 
 # Nsight
 apt install -y --no-install-recommends gnupg
@@ -49,7 +50,7 @@ rm -rf /var/lib/apt/lists/*
 EOF
 
 # CMake (for CUDA extension builds: transformer-engine, mamba-ssm, etc.)
-RUN CMAKE_VERSION=3.31.1 \
+RUN CMAKE_VERSION=4.0.3 \
     && ARCH=$(uname -m) \
     && CMAKE_INSTALLER="cmake-${CMAKE_VERSION}-linux-${ARCH}" \
     && curl --retry 3 --retry-delay 2 -fsSL -o "${CMAKE_INSTALLER}.tar.gz" \
@@ -75,8 +76,8 @@ FROM base AS nemo-rl-src
 
 ## 1. Clone nemo-rl (+ 3rdparty submodules) and record provenance.
 # Submodule ARGs: SKIP = keep the pin from the nemo-rl revision.
-ARG NEMO_RL_REPO=https://github.com/michal2409/RL.git
-ARG NEMO_RL_REVISION=mfutrega/mlperf-training-qwen35-main-gb300-fixes
+ARG NEMO_RL_REPO=https://github.com/shuyixiong/RL.git
+ARG NEMO_RL_REVISION=trtllm-agentic-swe-mlperf
 ARG NEMO_GYM_REVISION=SKIP
 ARG MBRIDGE_REVISION=SKIP
 ARG AUTOMODEL_REVISION=SKIP
@@ -146,9 +147,19 @@ ARG BUILD_CUSTOM_VLLM_PRECOMPILED_WHEEL_LOCATION
 ARG BUILD_CUSTOM_FLASHINFER
 ARG BUILD_CUSTOM_FLASHINFER_URL
 ARG BUILD_CUSTOM_FLASHINFER_REF
+# TensorRT-LLM does not publish a cp313 release wheel on PyPI — the official
+# releases target cp312 and below. Until an official cp313 wheel is available,
+# we must build from source. These ARGs control which commit is compiled:
+#   BUILD_CUSTOM_TRTLLM_URL  git remote (default: github.com/NVIDIA/TensorRT-LLM)
+#   BUILD_CUSTOM_TRTLLM_REF  commit hash / branch / tag to checkout
+# The build is handled by 3rdparty/TensorRT-LLM-workspace/_backend.py via the
+# PEP 517 hook invoked during `uv sync --extra trtllm`.
+ARG BUILD_CUSTOM_TRTLLM_URL
+ARG BUILD_CUSTOM_TRTLLM_REF
 ARG SKIP_VLLM_BUILD
 # SGLang is not used by this benchmark; skip it by default to cut build time.
 ARG SKIP_SGLANG_BUILD=1
+ARG SKIP_TRTLLM_BUILD
 ARG NEMO_RL_BASE_IMAGE
 ARG UV_VERSION
 
@@ -158,11 +169,17 @@ ENV TORCH_CUDA_ARCH_LIST="9.0 10.0 10.3"
 ENV CUDA_HOME=/usr/local/cuda
 ENV CPLUS_INCLUDE_PATH=/usr/local/cuda/include/cccl
 
+# Point TE at the pip-installed cuDNN, not the system one (see nemo-rl docker/Dockerfile)
+ENV CUDNN_HOME=/opt/nemo_rl_venv/lib/python3.13/site-packages/nvidia/cudnn
+ENV CUDNN_PATH=/opt/nemo_rl_venv/lib/python3.13/site-packages/nvidia/cudnn
+ENV LD_LIBRARY_PATH="/opt/nemo_rl_venv/lib/python3.13/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}"
+
 # First copy only the dependency files (source COPY happens in release)
 COPY --from=nemo-rl-src /opt/nemo-rl-src/pyproject.toml /opt/nemo-rl-src/uv.lock ./
 COPY --from=nemo-rl-src /opt/nemo-rl-src/nemo_rl/__init__.py /opt/nemo-rl-src/nemo_rl/package_info.py ./nemo_rl/
 COPY --from=nemo-rl-src /opt/nemo-rl-src/tools/build-custom-vllm.sh ./tools/build-custom-vllm.sh
 COPY --from=nemo-rl-src /opt/nemo-rl-src/tools/build-custom-flashinfer.sh ./tools/build-custom-flashinfer.sh
+COPY --from=nemo-rl-src /opt/nemo-rl-src/tools/build-custom-trtllm.sh ./tools/build-custom-trtllm.sh
 COPY --from=nemo-rl-src --link /opt/nemo-rl-src/research/ ./research/
 COPY --from=nemo-rl-src --link /opt/nemo-rl-src/3rdparty/ ./3rdparty/
 
@@ -200,6 +217,15 @@ fi
 if [[ -z "${SKIP_SGLANG_BUILD:-}" ]]; then
     UV_LINK_MODE=hardlink uv sync --locked --extra sglang --no-install-project
 fi
+if [[ -z "${SKIP_TRTLLM_BUILD:-}" ]]; then
+    # The custom PEP 517 backend in 3rdparty/TensorRT-LLM-workspace/_backend.py
+    # invokes tools/build-custom-trtllm.sh during this sync (≈60 min).
+    # Build coordinates are passed via env vars:
+    #   BUILD_CUSTOM_TRTLLM_URL / BUILD_CUSTOM_TRTLLM_REF
+    BUILD_CUSTOM_TRTLLM_URL=https://github.com/hchings/TensorRT-LLM.git \
+    BUILD_CUSTOM_TRTLLM_REF=983e7ff57dd26ce662e1b34cce94b76c9181be05 \
+    uv sync --link-mode symlink --locked --extra trtllm --no-install-project
+fi
 uv sync --link-mode symlink --locked --extra mcore --no-install-project
 uv sync --link-mode symlink --locked --extra automodel --no-install-project
 uv sync --link-mode symlink --locked --extra modelopt --no-install-project
@@ -212,14 +238,12 @@ echo "${CACHE_KEY}" > /root/.cache/uv/.cache-key
 EOF
 
 ENV PATH="/opt/nemo_rl_venv/bin:$PATH"
-# Point TE at the pip-installed cuDNN, not the system one (see nemo-rl docker/Dockerfile)
-ENV CUDNN_HOME=/opt/nemo_rl_venv/lib/python3.13/site-packages/nvidia/cudnn
-ENV LD_LIBRARY_PATH="/opt/nemo_rl_venv/lib/python3.13/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}"
 
 ## Stage: release — source + ray venvs (vendored from nemo-rl)
 FROM hermetic AS release
 ARG SKIP_VLLM_BUILD
 ARG SKIP_SGLANG_BUILD=1
+ARG SKIP_TRTLLM_BUILD
 ARG TARGETARCH
 
 ENV NEMO_RL_VENV_DIR=/opt/ray_venvs
