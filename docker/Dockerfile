@@ -213,6 +213,8 @@ if [[ -z "${SKIP_TRTLLM_BUILD:-}" ]]; then
     # invokes tools/build-custom-trtllm.sh during this sync (≈60 min).
     # Build coordinates are passed via env vars:
     #   BUILD_CUSTOM_TRTLLM_URL / BUILD_CUSTOM_TRTLLM_REF
+    BUILD_CUSTOM_TRTLLM_URL=https://github.com/hchings/TensorRT-LLM.git \
+    BUILD_CUSTOM_TRTLLM_REF=983e7ff57dd26ce662e1b34cce94b76c9181be05 \
     uv sync --link-mode symlink --locked --extra trtllm --no-install-project
 fi
 

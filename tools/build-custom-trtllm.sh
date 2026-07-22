@@ -90,6 +90,11 @@ sed -i 's|^setuptools<80$|setuptools|' requirements.txt
 sed -i 's|COMMAND \${Python3_EXECUTABLE} setup_library.py develop --user|COMMAND bash -c "cp -f setup_library.py setup.py \&\& \${Python3_EXECUTABLE} setup_library.py develop"|' \
     cpp/tensorrt_llm/kernels/cutlass_kernels/CMakeLists.txt
 
+# Fix nvshmem: it doesn't accept '100f-real' (CMake >= 3.31 generates this for GB300).
+# Hardcode '100' only for the nvshmem cmake call; DeepEP kernels keep '100f' for FP4 support.
+sed -i 's|-DCMAKE_CUDA_ARCHITECTURES:STRING=${DEEP_EP_CUDA_ARCHITECTURES}|-DCMAKE_CUDA_ARCHITECTURES:STRING=100|' \
+    cpp/tensorrt_llm/deep_ep/CMakeLists.txt
+
 # Build the wheel.
 #   -a 100-real: Blackwell (sm_100) only — gb200 target. Bump to include
 #                90 for Hopper or 100,90 for both.
@@ -97,7 +102,7 @@ sed -i 's|COMMAND \${Python3_EXECUTABLE} setup_library.py develop --user|COMMAND
 #                            libnvrtc-builtins lazily instead of statically.
 echo "Building TensorRT-LLM wheel (this takes ~30-60 minutes)..."
 python3 scripts/build_wheel.py \
-    -a "80-real;90-real;100-real" \
+    -a "100-real, 103-real" \
     -G Ninja \
     --clean \
     --nvrtc_dynamic_linking \
