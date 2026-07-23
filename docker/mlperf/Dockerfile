@@ -426,8 +426,12 @@ overlay() {
     local src="$1"; shift
     local pattern="$1"; shift
     local targets
-    # -L: venv entries are symlinks into the uv cache; realpath dedupes them
-    targets=$( { find -L /root/.cache/uv /opt/nemo_rl_venv /opt/ray_venvs /opt/gym_venvs -type f -path "$pattern" 2>/dev/null || true; } | xargs -r -n1 realpath | sort -u )
+    # -L: venv entries are symlinks into the uv cache; realpath dedupes them.
+    # Exclude TensorRT-LLM's vendored fla copy (tensorrt_llm/_torch/modules/fla):
+    # the broad "*/fla/utils.py" glob otherwise clobbers it with the standalone
+    # fla-core file, whose input_guard() signature (no_guard_contiguous) does not
+    # match trtllm's own fused_recurrent.py calls (exclude_args) -> import crash.
+    targets=$( { find -L /root/.cache/uv /opt/nemo_rl_venv /opt/ray_venvs /opt/gym_venvs -type f -path "$pattern" -not -path "*/tensorrt_llm/*" 2>/dev/null || true; } | xargs -r -n1 realpath | sort -u )
     if [[ -z "$targets" ]]; then
         echo "ERROR: no target found for runtime fix $src (pattern $pattern)" >&2
         exit 1
