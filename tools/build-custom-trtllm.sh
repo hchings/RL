@@ -155,6 +155,11 @@ assert_patch_target cpp/tensorrt_llm/kernels/cutlass_kernels/CMakeLists.txt \
 sed -i 's|COMMAND \${Python3_EXECUTABLE} setup_library.py develop --user|COMMAND bash -c "cp -f setup_library.py setup.py \&\& \${Python3_EXECUTABLE} setup_library.py develop"|' \
     cpp/tensorrt_llm/kernels/cutlass_kernels/CMakeLists.txt
 
+# Fix nvshmem: it doesn't accept '100f-real' (CMake >= 3.31 generates this for GB300).
+# Hardcode '100' only for the nvshmem cmake call; DeepEP kernels keep '100f' for FP4 support.
+sed -i 's|-DCMAKE_CUDA_ARCHITECTURES:STRING=${DEEP_EP_CUDA_ARCHITECTURES}|-DCMAKE_CUDA_ARCHITECTURES:STRING=100|' \
+    cpp/tensorrt_llm/deep_ep/CMakeLists.txt
+
 # SM arch list. Sourced from BUILD_CUSTOM_TRTLLM_ARCH so it stays in sync with
 # _backend.py, which folds the same value into the wheel cache key (a change to
 # the arch list must invalidate the cached wheel). The default below MUST match

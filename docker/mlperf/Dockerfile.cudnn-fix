@@ -1,0 +1,81 @@
+# syntax=docker/dockerfile:1
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#
+# Thin overlay over an existing MLPerf / TRT-LLM image that bakes the cuDNN
+# sublibrary symlinks needed to avoid, at runtime:
+#     CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED / _VERSION_MISMATCH
+#
+# Root cause: pip's nvidia-cudnn wheels ship only the major soname
+# (libcudnn_*.so.9), but Transformer Engine and torch's conv ops (via the cuDNN
+# frontend) dlopen the FULL minor-versioned name libcudnn_*.so.9.<X>.<Y>. When
+# that versioned name is missing the load fails; when torch's preloaded main lib
+# and the dlopen'd sublibs come from different builds you get a version mismatch.
+#
+# Why a build-time overlay (not a runtime hook): the equivalent nemo_rl runtime
+# fix runs in create_local_venv, but prefetched/baked per-actor venvs skip that
+# path, and a per-node Ray hook did not reliably fire on every generation node.
+# Baking here makes every node's image identical and hook-independent.
+#
+# Build (from the CWD of this file's repo root, or point -f at it):
+#   docker buildx build -f docker/mlperf/Dockerfile.cudnn-fix \
+#       --build-arg BASE_IMAGE=<ref> -t <out> .
+#
+# The base image is the existing mlperf image. Its enroot form
+#   docker://gitlab-master.nvidia.com#shuyix/docker-images:nemo-rl-trtllm-20260722-aarch64-mlperf
+# maps to the docker reference below; override with --build-arg BASE_IMAGE=... if
+# your registry needs an explicit port (e.g. gitlab-master.nvidia.com:5005/...).
+ARG BASE_IMAGE=gitlab-master.nvidia.com/shuyix/docker-images:nemo-rl-trtllm-20260722-aarch64-mlperf
+FROM ${BASE_IMAGE}
+
+# Set to 0 to leave the image untouched.
+ARG APPLY_CUDNN_SUBLIB_SYMLINKS=1
+# Authoritative venv whose cuDNN build every worker resolves to via LD_LIBRARY_PATH.
+ARG MAIN_VENV=/opt/nemo_rl_venv
+# The TRT-LLM generation worker venv whose cuDNN is pointed back at MAIN_VENV.
+# Only this venv is touched; every other venv is left as-is.
+ARG TRTLLM_VENV=/opt/ray_venvs/nemo_rl.models.generation.trtllm.trtllm_worker_async.TrtllmAsyncGenerationWorker
+
+RUN <<"EOF" bash -exu -o pipefail
+if [[ "${APPLY_CUDNN_SUBLIB_SYMLINKS}" != "1" ]]; then
+    echo "APPLY_CUDNN_SUBLIB_SYMLINKS != 1; leaving cuDNN untouched"; exit 0
+fi
+
+main_dir=$(find "${MAIN_VENV}" -type d -path '*/nvidia/cudnn/lib' 2>/dev/null | head -1)
+[[ -n "${main_dir}" ]] || { echo "ERROR: main venv cuDNN dir not found under ${MAIN_VENV}" >&2; exit 1; }
+
+# Derive the ".MINOR.PATCH" suffix the loader appends (cuDNN 9.20.0 -> ".20.0")
+# from the installed wheel's dist-info. Pure filesystem: no GPU, no dlopen.
+suffix=""
+for di in $(find "${MAIN_VENV}" -maxdepth 5 -type d -name 'nvidia_cudnn_cu*-*.dist-info' 2>/dev/null); do
+    v=$(basename "$di" | sed -E 's/nvidia_cudnn_cu[0-9]+-[0-9]+\.([0-9]+)\.([0-9]+).*/.\1.\2/')
+    [[ "$v" =~ ^\.[0-9]+\.[0-9]+$ ]] && { suffix="$v"; break; }
+done
+[[ -n "${suffix}" ]] || { echo "ERROR: could not derive cuDNN version from ${MAIN_VENV} dist-info" >&2; exit 1; }
+echo "cuDNN suffix=${suffix} main_dir=${main_dir}"
+
+# (1) Minor-versioned names for the SUBLIBRARIES in the authoritative dir. NOT
+#     libcudnn.so.9 itself: the `cudnn` python package globs libcudnn.so.* and
+#     asserts exactly one match.
+n=0
+for f in "${main_dir}"/libcudnn_*.so.9; do
+    [[ -e "$f" ]] || continue
+    ln -sfn "$(basename "$f")" "${f}${suffix}"; n=$((n+1))   # relative, within main_dir
+done
+[[ "$n" -gt 0 ]] || { echo "ERROR: no libcudnn_*.so.9 sublibraries in ${main_dir}" >&2; exit 1; }
+echo "(1) created ${n} versioned sublib symlink(s) in ${main_dir}"
+
+# (2) Point ONLY the TRT-LLM worker venv's cuDNN (main lib + sublibs + versioned)
+#     at the main venv so its preloaded libcudnn and dlopen'd sublibs share one
+#     build, and the versioned names resolve there too. No other venv is touched.
+#     No-op if the trtllm venv is absent (e.g. a non-trtllm image).
+did=0
+for trt_dir in $(find "${TRTLLM_VENV}" -type d -path '*/nvidia/cudnn/lib' 2>/dev/null); do
+    [[ "${trt_dir}" == "${main_dir}" ]] && continue
+    for f in "${main_dir}"/libcudnn*.so.9 "${main_dir}"/libcudnn_*.so.9${suffix}; do
+        [[ -e "$f" ]] || continue
+        ln -sfn "$f" "${trt_dir}/$(basename "$f")"   # absolute -> main venv
+    done
+    echo "(2) reconciled ${trt_dir} -> ${main_dir}"; did=$((did+1))
+done
+[[ "$did" -gt 0 ]] || echo "(2) no trtllm venv cuDNN dir under ${TRTLLM_VENV}; skipped"
+EOF
