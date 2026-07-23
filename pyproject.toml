@@ -174,13 +174,6 @@ mcore = [
   "transformer-engine[pytorch,core_cu13] @ git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.15",
   "megatron-core",
   "megatron-bridge",
-  # Pin fla to 0.4.2: megatron-bridge pulls in flash-linear-attention → fla-core.
-  # 0.4.2 is required to match the MLPerf reference (michal2409/RL) and to keep
-  # the FLA runtime fixes (fla_wy_fast.py / fla_utils.py) applicable — they
-  # target 0.4.2 APIs and are incompatible with 0.5.1 (fla/utils.py became a
-  # package directory in 0.5.1, breaking the overlay pattern).
-  "flash-linear-attention==0.4.2",
-  "fla-core==0.4.2",
   # Must match Megatron-Bridge main's transformers requirement (still includes GLM 5.1 support).
   "transformers>=5.8.1,<5.9.0",
   "nvidia-modelopt[torch]; sys_platform != 'darwin'",
@@ -371,6 +364,12 @@ override-dependencies = [
   "torchaudio==2.11.0",
   # sglang has conflicting llguidance versions than vllm, so enforcing vllm's version since it's newer
   "llguidance>=1.3.0,<1.4.0",
+  # Pin fla to 0.4.2 globally: megatron-bridge's `fla` extra resolves to 0.5.1
+  # which breaks the MLPerf FLA runtime fixes (fla/utils.py became a package
+  # directory in 0.5.1). Must be in override-dependencies (not just the mcore
+  # extra) so all venvs — including gym/ray worker venvs — get 0.4.2.
+  "flash-linear-attention==0.4.2",
+  "fla-core==0.4.2",
   # Override setuptools range in other dependencies to address CVE GHSA-58pv-8j8x-9vj2
   "setuptools>=80.10.2",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@29d31c095796f3c8ece47ee9cdcc167051bbeed9 ; platform_machine == 'x86_64'",
