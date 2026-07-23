@@ -34,6 +34,24 @@ from nemo_rl.models.generation.openai_server_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _build_reasoning_parser(
+    name: str, chat_template_kwargs: dict[str, Any]
+) -> Any:
+    from tensorrt_llm.llmapi.reasoning_parser import ReasoningParserFactory
+
+    if name == "deepseek-r1" and "enable_thinking" in chat_template_kwargs:
+        from tensorrt_llm.llmapi.reasoning_parser import DeepSeekR1Parser
+
+        return DeepSeekR1Parser(
+            reasoning_at_start=bool(chat_template_kwargs["enable_thinking"]),
+            chat_template_kwargs=chat_template_kwargs,
+        )
+
+    return ReasoningParserFactory.create_reasoning_parser(
+        name, chat_template_kwargs
+    )
+
+
 def create_app(
     llm: Any,
     tokenizer: Any,
@@ -69,13 +87,7 @@ def create_app(
         )
 
     if reasoning_parser is not None:
-        from tensorrt_llm.llmapi.reasoning_parser import ReasoningParserFactory
-
-        # Validate the configured parser when the server starts. A fresh parser is
-        # created per request below with that request's chat-template arguments.
-        ReasoningParserFactory.create_reasoning_parser(
-            reasoning_parser, _server_template_kwargs
-        )
+        _build_reasoning_parser(reasoning_parser, _server_template_kwargs)
 
     # Match TRT-LLM's effective EOS set so this adapter can trim every returned
     # stop token and its logprob together, preserving multi-turn continuity.
@@ -114,20 +126,18 @@ def create_app(
         # The NeMo-RL generation config, not the request, is the source of truth
         # for sampling params.
         for key in ("temperature", "top_p"):
-            assert key in body, f"request must include {key}"
-            assert body[key] == sampling_config[key], (
-                f"request {key} {body[key]!r} must match the "
-                f"NeMo-RL generation config ({sampling_config[key]})"
-            )
+            if body.get(key) is not None:
+                assert body[key] == sampling_config[key], (
+                    f"request {key} {body[key]!r} must match the "
+                    f"NeMo-RL generation config ({sampling_config[key]})"
+                )
 
         # Request kwargs override server defaults.
         per_request_kwargs: dict[str, Any] = body.get("chat_template_kwargs") or {}
         effective_template_kwargs = {**_server_template_kwargs, **per_request_kwargs}
 
         _active_reasoning_parser = (
-            ReasoningParserFactory.create_reasoning_parser(
-                reasoning_parser, effective_template_kwargs
-            )
+            _build_reasoning_parser(reasoning_parser, effective_template_kwargs)
             if reasoning_parser is not None
             else None
         )
